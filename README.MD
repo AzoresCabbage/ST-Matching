@@ -4,4 +4,4 @@ This paper can access in the [website of MSRA](http://research.microsoft.com/pub
 
 Any questions or advice are welcome.
 
-**Details explanation about the code will be adding soon**
+**Details of explanation about the code will be adding soon**
