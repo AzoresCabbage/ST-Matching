@@ -3,7 +3,7 @@
 #include "stdafx.h"
 using namespace std;
 
-extern Database DB;
+extern Database* DB;
 
 struct EDGE{
 	int v;//邻接边的点
@@ -58,6 +58,7 @@ class Graph{
 private:
 
 	int n;//图中点总数
+	string roadTN;
 	vector < EDGE > * edge;//存边
 	vector <RoadSegment> Road;//路段
 	vector <Point> allCandiPoint;//对于candidatePoint:PointID->Point 的映射	
@@ -94,7 +95,7 @@ public:
 	int tTosSeg;//求t->s时最短路的路段数
 	int totCandiPoint;//candiPoint的总数，用于编号
 
-	Graph();
+	Graph(string roadTN);
 	~Graph();
 
 	void reset();

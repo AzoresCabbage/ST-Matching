@@ -1,7 +1,8 @@
 #include "stdafx.h"
 using namespace std;
 
-Graph::Graph(){
+Graph::Graph(string RTN){
+	roadTN = RTN;
 	constructGraph();
 	constructConn();
 	divideRegion();
@@ -15,6 +16,7 @@ Graph::~Graph(){
 	delete []fa;
 	delete []preV;
 	n = 0;
+	roadTN = "";
 }
 
 void Graph::bfs(int u,int sg){
@@ -49,9 +51,11 @@ void Graph::constructConn(){
 void Graph::constructGraph(){
 	cerr<<"start construct graph"<<endl;
 	time_t tm = clock();
-
-	string SQL = "select id,ST_AsText(ST_Transform(the_geom,4326)) from network_vertices_pgr";
-	PGresult*  res = DB.execQuery(SQL);
+	
+	char buff[500];
+	sprintf_s(buff,"select id,ST_AsText(ST_Transform(the_geom,4326)) from %s_vertices_pgr",roadTN.c_str());
+	string SQL = buff;
+	PGresult*  res = DB->execQuery(SQL);
 	int tupleNum = n = PQntuples(res);
 	int id;
 
@@ -73,8 +77,9 @@ void Graph::constructGraph(){
 	}
 	PQclear(res);
 	
-	SQL = "select source,target,ST_length(way),highway,gid,oneway from network where highway <> '';";
-	res = DB.execQuery(SQL);
+	sprintf_s(buff,"select source,target,ST_length(way),highway,gid,oneway from %s where highway <> '';",roadTN.c_str());
+	SQL = buff;
+	res = DB->execQuery(SQL);
 	tupleNum = PQntuples(res);
 	int st,ed;
 	double cost;

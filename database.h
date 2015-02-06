@@ -13,12 +13,19 @@ PQclear Frees the storage associated with the PGresult. Every query result shoul
 
 class Database{
 private:
-	const std::string connInfo;//连接字
+	std::string connInfo;//连接字
 	PGconn* conn;
 	void closeConn();
 	bool connDB();
 public:
-	Database():conn(NULL),connInfo("port = '5432' dbname = 'osm' user = 'postgres' password = 'wyjcool' "){connDB();}
+	Database(std::string dbname,std::string port,std::string dbaddr):conn(NULL){
+		char buff[500];
+		sprintf_s(buff,"port = '%s' dbname = '%s' hostaddr = '%s' ",port.c_str(),dbname.c_str(),dbaddr.c_str());
+		connInfo = buff;
+		if(!connDB()){
+			exit(0);
+		}
+	}
 	~Database(){closeConn();}
 	PGresult* execQuery(std::string SQL);
 	bool execUpdate(std::string SQL);

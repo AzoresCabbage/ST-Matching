@@ -2,7 +2,19 @@
 #include "database.h"
 
 bool Database::connDB(){
+	string tmp,username,password;
+	
+	cout<<"Database user name:";
+	cin>>username;
+	cout<<"Database user password:";
+	cin>>password;
+	
+	char buff[500];
+	sprintf_s(buff,"user = '%s' password = '%s' ",username.c_str(),password.c_str());
+	connInfo = connInfo + buff;
+	
 	conn = PQconnectdb(connInfo.c_str());
+
 	if(PQstatus(conn) == CONNECTION_BAD){
 		std::cerr<<"Database connection failed!"<<std::endl;
 		return false;
