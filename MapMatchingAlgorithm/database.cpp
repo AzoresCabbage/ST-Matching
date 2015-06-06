@@ -4,11 +4,12 @@
 bool Database::connDB(){
 	string tmp,username,password;
 	
-	cout<<"Database user name:";
-	cin>>username;
-	cout<<"Database user password:";
-	cin>>password;
-	
+	//cout<<"Database user name:";
+	//cin>>username;
+	//cout<<"Database user password:";
+	//cin>>password;
+	username = "postgres";
+	password = "wyjcool";
 	char buff[500];
 	sprintf_s(buff,"user = '%s' password = '%s' ",username.c_str(),password.c_str());
 	connInfo = connInfo + buff;

@@ -1,4 +1,6 @@
 #include "stdafx.h"
+#include "Graph.h"
+#include <set>
 using namespace std;
 
 Graph::Graph(string RTN){
@@ -13,8 +15,8 @@ Graph::~Graph(){
 	delete []dis;
 	delete []pre;
 	delete []edge;
-	delete []fa;
 	delete []preV;
+	delete []fa;
 	n = 0;
 	roadTN = "";
 }
@@ -27,7 +29,7 @@ void Graph::bfs(int u,int sg){
 		int cur = q.front();
 		q.pop();
 		fa[cur] = sg;
-		size_t sz = edge[cur].size();
+		int sz = (int)edge[cur].size();
 		for(int i=0;i<sz;++i){
 			int v = edge[cur][i].v;
 			if(!vis[v]) {
@@ -52,10 +54,11 @@ void Graph::constructGraph(){
 	cerr<<"start construct graph"<<endl;
 	time_t tm = clock();
 	
-	char buff[500];
+	char buff[1000];
 	sprintf_s(buff,"select id,ST_AsText(ST_Transform(the_geom,4326)) from %s_vertices_pgr",roadTN.c_str());
 	string SQL = buff;
-	PGresult*  res = DB->execQuery(SQL);
+	Database DB("osm","5432","127.0.0.1");
+	PGresult*  res = DB.execQuery(SQL);
 	int tupleNum = n = PQntuples(res);
 	int id;
 
@@ -64,8 +67,8 @@ void Graph::constructGraph(){
 	vis = new bool[n+1];
 	dis = new double[n+1];
 	pre = new int[n+1];
-	fa = new int[n+1];
 	preV = new double[n+1];
+	fa = new int[n+1];
 
 	double x,y;
 	for(int i=0;i<tupleNum;i++){
@@ -73,17 +76,18 @@ void Graph::constructGraph(){
 		sscanf_s(tmp.c_str(),"%d",&id);
 		tmp = PQgetvalue(res,i,1);
 		sscanf_s(tmp.c_str(),"POINT(%lf %lf)",&x,&y);
-		idToPoint[id] = Point(x,y);
+		idToPoint[id] = Point(x,y,id);
 	}
 	PQclear(res);
 	
-	sprintf_s(buff,"select source,target,ST_length(way),highway,gid,oneway from %s where highway <> '';",roadTN.c_str());
+	sprintf_s(buff,"select source,target,ST_length(way),highway,gid,oneway from %s where highway = 'secondary' or highway = 'primary' or highway = 'track' or highway = 'motorway' or highway = 'proposed' or highway = 'tertiary' or highway = 'trunk' or highway = 'tertiary_link' or highway = 'raceway' or highway = 'motorway_link' or highway = 'bridleway' or highway = 'secondary_link' or highway = 'primary_link' or highway = 'service' or highway = 'cycleway' or highway = 'trunk_link' or highway = 'road' or highway = 'residential';",roadTN.c_str());
 	SQL = buff;
-	res = DB->execQuery(SQL);
+	res = DB.execQuery(SQL);
 	tupleNum = PQntuples(res);
 	int st,ed;
 	double cost;
 	double v;
+	Road.resize(tupleNum);
 	for(int i=0;i<tupleNum;++i){
 		string tmp = PQgetvalue(res,i,0);
 		sscanf_s(tmp.c_str(),"%d",&st);
@@ -93,7 +97,6 @@ void Graph::constructGraph(){
 
 		tmp = PQgetvalue(res,i,2);
 		sscanf_s(tmp.c_str(),"%lf",&cost);
-		cost /= 1000.0;//转化为千米
 
 		tmp = PQgetvalue(res,i,3);
 		v = judgeV(tmp.c_str())*1000/3600;
@@ -108,16 +111,16 @@ void Graph::constructGraph(){
 		tmp = PQgetvalue(res,i,5);
 		if(tmp != "yes")
 			edge[ed].push_back(EDGE(st,cost,v,idToPoint[st]));
+		//Point tPoint = idToPoint[st];
+		Road[id-1] = RoadSegment(idToPoint[st],idToPoint[ed],st,ed,id,v,tmp!="yes"?false:true);
 
-		Road.push_back(RoadSegment(idToPoint[st],idToPoint[ed],st,ed,id,v,tmp!="yes"?false:true));
-		idToidx[id] = i;
 	}
 	PQclear(res);
 
 	cerr << "construct Graph cost = "<<clock()-tm<<"ms"<<endl;
 }
 
-//根据道路类型，返回道路速度，单位为km
+//根据道路类型，返回道路速度，单位为km,使用时*1000/3600变为m/s
 double Graph::judgeV(string ss){
 	char s[50];
 	strcpy_s(s,ss.c_str());
@@ -168,7 +171,7 @@ double Graph::shortest_path(int src,int des){
 		if(vis[u] == true)continue;
 		if(u == des) return dis[des];
 		vis[u] = true;
-		size_t sz = edge[u].size();
+		int sz = (int)edge[u].size();
 		for(int i=0;i<sz;++i){
 			int v = edge[u][i].v;
 			double cost = edge[u][i].cost;
@@ -215,7 +218,13 @@ vector <double> Graph::getSegSpeed(int des){
 }
 
 Point Graph::getCandiPointById(int id){
-	return allCandiPoint[id];
+	try{
+		return allCandiPoint[id];
+	}
+	catch (exception e){
+		fprintf(stderr,"idx out of range when getCandiPointById %d\n",id);
+	}
+	return Point(0,0);
 }
 
 Point Graph::getPointById(int id){
@@ -235,38 +244,37 @@ vector < Point > Graph::getCandidate(Point p,double DIS,int K){
 
 	//ofstream fout("candiPoint.txt",ios::app);
 	vector < Point > st;
-	vector < TMP > tmp;
+	set < TMP > tmp;
 
 	while(!Q.empty()){
 		int u = Q.top().second;
 		Q.pop();
-		size_t sz = RoadIdxOfRegion[u].size();
+		int sz = (int)RoadIdxOfRegion[u].size();
 		for(int j=0;j<sz;++j){
 			//对最近点与p距离在R以内的点为候选点，为其分配ID，并加入所有候选点集
-			int idx = RoadIdxOfRegion[u][j];//分割的区域u中第j条道路在Road中的下标
-			int id = Road[idx].id;//此条道路的id
-			Point la = Road[idx].st;
-			Point lb = Road[idx].ed;
+			int id = RoadIdxOfRegion[u][j] - 1;//编号为id的路段在id-1储存
+			Point la = Road[id].st;
+			Point lb = Road[id].ed;
+			RoadSegment trd = Road[id];
 			double dis = dispToseg(p,la,lb);
 			if(dis <= DIS){
 				Point pivot(pToseg(p,la,lb));
-				tmp.push_back(TMP(dis,pivot,id));
+				tmp.insert(TMP(dis,pivot,id));
 			}
 		}
 	}
 	int tmpsz = (int)tmp.size();
-	if(tmpsz > K) 
-		sort(tmp.begin(),tmp.end());
 	tmpsz = min(K,tmpsz);
-	for(int i=0;i<tmpsz;++i){
-		Point pivot(tmp[i].pts);
+	int cnt = 0;
+	for(auto i=tmp.begin();i!=tmp.end() && cnt<tmpsz;++i,++cnt){
+		Point pivot(i->pts);
 
 		lock_totCandiPoint.lock();
 		pivot.id = totCandiPoint++;
 		allCandiPoint.push_back(pivot);
 		lock_totCandiPoint.unlock();
 
-		pInSeg[pivot.id] = tmp[i].rid;
+		pInSeg[pivot.id] = i->rid;
 		st.push_back(pivot);
 		//fout<<pivot.id<<" "<<pivot.x<<" "<<pivot.y<<" "<<tmp[i].rid<<endl;
 	}
@@ -277,6 +285,12 @@ vector < Point > Graph::getCandidate(Point p,double DIS,int K){
 
 //返回从t->s的路径上的点
 vector <int> Graph::getPath(Point t,Point s){
+	if(pInSeg[t.id] == pInSeg[s.id]){
+		vector <int> res;
+		res.push_back(s.id);
+		res.push_back(t.id);
+		return res;
+	}
 	getCandiShortest(t,s);
 	return getSegPoint(n-2);
 }
@@ -295,8 +309,8 @@ double Graph::getCandiShortest(Point t,Point s){
 		return tTosMin = getGeoDis(t,s);
 	}
 
-	RoadSegment Road1 = Road[idToidx[tid]];
-	RoadSegment Road2 = Road[idToidx[sid]];
+	RoadSegment Road1(Road[tid]);
+	RoadSegment Road2(Road[sid]);
 
 	int stID1 = Road1.stID;
 	int edID1 = Road1.edID;
@@ -309,7 +323,6 @@ double Graph::getCandiShortest(Point t,Point s){
 
 	pre[n-1] = pre[n-2] = -1;
 	if(fa[stID1] != fa[stID2]) return res;
-
 	//t's id -> n-1 , s'id -> n-2
 	double d1 = getGeoDis(t,st1);
 	double d2 = getGeoDis(t,ed1);
@@ -372,7 +385,7 @@ DWORD WINAPI Graph::calc(LPVOID ptr){
 		Point pp = RegionCen[cur];
 		for(int j=0;j<rsz;++j){
 			if(R > dispToseg(pp,Road[j].st,Road[j].ed)){
-				RoadIdxOfRegion[cur].push_back(j);
+				RoadIdxOfRegion[cur].push_back(Road[j].id);
 			}
 		}
 		//cerr<<cur<<" done!"<<endl;
@@ -383,6 +396,12 @@ DWORD WINAPI Graph::calc(LPVOID ptr){
 void Graph::divideRegion(){
 	time_t tm = clock();
 	cerr <<"start divideRegion"<<endl;
+
+	if(!needDevided && readFile()) {
+		cerr<<"divide region cost "<<clock()-tm<<"ms"<<endl;
+		return;
+	}
+
 	double LonR = (MaxLon - MinLon) / (DIVID_NUM*2);
 	double LatR = (MaxLat - MinLat) / (DIVID_NUM*2);
 	double LonD = 2*LonR;
@@ -406,7 +425,7 @@ void Graph::divideRegion(){
 	for(int i=0;i<threadNum;++i){
 		WaitForSingleObject(handle[i], INFINITE); 
 	}
-	
+	writeToFile();
 	cerr<<"divide region cost "<<clock()-tm<<"ms"<<endl;
 }
 
@@ -415,4 +434,46 @@ void Graph::reset(){
 	MinSpeed.clear();
 	pInSeg.clear();
 	totCandiPoint = 0;
+}
+
+void Graph::writeToFile(){
+	ofstream fout("region");
+	int sz = (int)RegionCen.size();
+	fout<<sz<<endl;//有几个区域
+	for(int i=0;i<sz;++i){
+		fout<<RegionCen[i].x<<" "<<RegionCen[i].y<<endl;//区域中心坐标
+		int idxSz = (int)RoadIdxOfRegion[i].size();
+		fout<<idxSz<<endl;//每个区域有多少道路
+		for(int j=0;j<idxSz;++j){
+			fout<<RoadIdxOfRegion[i][j]<<" ";//每条道路的id
+		}
+	}
+	fout.close();
+}
+
+bool Graph::readFile(){
+	ifstream fin("region");
+	try{
+		int sz;
+		int val;
+		double x,y;
+		fin>>sz;
+		RegionCen.resize(sz);//有多少区域
+		for(int i=0;i<sz;++i){
+			fin>>x>>y;
+			RegionCen[i] = Point(x,y);
+			int idxSz;
+			fin>>idxSz;
+			RoadIdxOfRegion[i].resize(idxSz);//每个区域多少条道路
+			for(int j=0;j<idxSz;++j){
+				fin >> val;
+				RoadIdxOfRegion[i][j] = val;//道路的编号
+			}
+		}
+		fin.close();
+	}
+	catch (exception e){
+		return false;
+	}
+	return true;
 }

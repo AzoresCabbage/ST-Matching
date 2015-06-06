@@ -31,6 +31,8 @@ struct GeoPoint{
 	Date date;//日期和时间
 	GeoPoint(double lat,double lon,Date dat):latitude(lat),longitude(lon),date(dat){}
 };
+#define BUFFSIZE 5000000
+#define threadNum 3
 
 string dbname;//数据库名称
 string dbport;//数据库端口号
@@ -41,7 +43,7 @@ int top;//求最优路径时选取当前值最大的TOP个点用于下一个点的计算
 double R = 0.1;//选取某轨迹点的候选点的范围，单位为Km
 double Sigma = 0.02;//正态分布，单位为Km
 int K = 5;//候选点最多的数量
-
+char buffer[BUFFSIZE];
 //////////////////变量定义/////////////////////////
 //variable
 time_t tm;//计时变量
@@ -337,8 +339,30 @@ vector <Point> ST_Matching_Algorithm(){
 	return FindMatchedSequence();
 }
 
+vector <Point> dealFlyPoint(vector <Point> Ori){
+	vector <Point> res;
+	res.push_back(Ori[0]);
+	const double LimitV = 25;
+	int sz = (int)Ori.size();
+	for(int i=1;i<sz;++i){
+		double dis = network->getCandiShortest(Ori[i-1],Ori[i]);
+		double span = P[i].date - P[i-1].date;
+		if(dis / span > LimitV){
+			if(i-2>=0 && ( network->getCandiShortest(Ori[i-2],Ori[i])/(P[i].date - P[i-2].date) ) < LimitV){
+				res.pop_back();
+				res.push_back(Ori[i]);
+				continue;
+			}
+			else 
+				continue;
+		}
+		res.push_back(Ori[i]);
+	}
+	return res;
+}
+
 //把匹配选中的点，路径写入数据库
-void writeToDB(vector <Point> Traj){
+void writeToDB(const vector <Point>& Traj){
 	//写入选中的候选点
 	string SQL = "select * from pg_class where relname = 'trajectory_point'";
 	PGresult* res = DB->execQuery(SQL);
@@ -353,11 +377,31 @@ void writeToDB(vector <Point> Traj){
 		SQL = "create table trajectory_point (id integer primary key,way geometry(Point,4326))";
 		DB->execUpdate(SQL);
 	}
-	size_t sz = Traj.size();
-	char buffer[500];
+	int sz = (int)Traj.size();
 
 	for(int i=0;i<sz;++i){
 		sprintf_s(buffer,"insert into trajectory_point values(%d,ST_GeomFromText('Point(%lf %lf)',4326))",i+1,Traj[i].x,Traj[i].y);
+		SQL = buffer;
+		DB->execUpdate(SQL);
+	}
+
+	//写入匹配轨迹的折线
+	SQL = "select * from pg_class where relname = 'trajectory_polyline'";
+	res = DB->execQuery(SQL);
+	num = PQntuples(res);
+	PQclear(res);
+
+	if(num != 0){
+		SQL = "Delete from trajectory_polyline";
+		DB->execUpdate(SQL);
+	}
+	else{
+		SQL = "create table trajectory_polyline (id integer primary key,way geometry(LineString,4326))";
+		DB->execUpdate(SQL);
+	}
+	for(int i=1;i<sz;++i)
+	{
+		sprintf_s(buffer,"insert into trajectory_polyline values(%d,ST_GeomFromText('LineString(%lf %lf,%lf %lf)',4326))",i,Traj[i-1].x,Traj[i-1].y,Traj[i].x,Traj[i].y);
 		SQL = buffer;
 		DB->execUpdate(SQL);
 	}
@@ -373,49 +417,56 @@ void writeToDB(vector <Point> Traj){
 		DB->execUpdate(SQL);
 	}
 	else{
-		SQL = "create table trajectory_line (id integer primary key,src integer,des integer,way geometry(LineString,4326))";
+		SQL = "create table trajectory_line (id integer primary key,way geometry(LineString,4326))";
 		DB->execUpdate(SQL);
 	}
-	sz = Traj.size();
-	buffer[500];
-
+	sz = (int)Traj.size();
 	int ID = 0;
-	for(int i=1;i<sz;++i){
-		if(network->isInSameSeg(Traj[i-1].id,Traj[i].id)){
-			//in same seg
-			sprintf_s(buffer,"insert into trajectory_line values(%d,%d,%d,ST_GeomFromText('LineString(%lf %lf,%lf %lf)',4326))",ID++,Traj[i-1].id,Traj[i].id,Traj[i-1].x,Traj[i-1].y,Traj[i].x,Traj[i].y);
-			SQL = buffer;
-			DB->execUpdate(SQL);
-		}
-		else{
+	int cnt = 0;
+	sprintf_s(buffer,"insert into trajectory_line values(%d,ST_GeomFromText('LineString(%.6f %.6f"
+		,ID++,Traj[0].x,Traj[0].y);
+	int baseLen = strlen(buffer);
+	for(int i=1;i<sz;++i)
+	{
+		//if(network->isInSameSeg(Traj[i-1].id,Traj[i].id))
+		//{
+		//	//in same seg
+		//	sprintf_s(buffer+cnt,BUFFSIZE-cnt,",%lf %lf",Traj[i].x,Traj[i].y);
+		//}
+		//else
+		{
 			vector <int> path = network->getPath(Traj[i-1],Traj[i]);
-			path.pop_back();//path中包含S,T两个点位于一头一尾
-			if(path.empty() || path.size() < 2) {
-				sprintf_s(buffer,"insert into trajectory_line values(%d,%d,%d,ST_GeomFromText('LineString(%lf %lf,%lf %lf)',4326))",ID++,Traj[i-1].id,Traj[i].id,Traj[i-1].x,Traj[i-1].y,Traj[i].x,Traj[i].y);
-				SQL = buffer;
-				DB->execUpdate(SQL);
-			}
-			else{
-				Point cur(network->getPointById(path[1]));
-				sprintf_s(buffer,"insert into trajectory_line values(%d,%d,%d,ST_GeomFromText('LineString(%lf %lf,%lf %lf)',4326))",ID++,Traj[i-1].id,Traj[i].id,cur.x,cur.y,Traj[i].x,Traj[i].y);
-				SQL = buffer;
-				DB->execUpdate(SQL);
-				size_t psz = path.size();
-				for(int j=2;j<psz;++j){
-					cur = network->getPointById(path[j]);
-					Point pre(network->getPointById(path[j-1]));
-					sprintf_s(buffer,"insert into trajectory_line values(%d,%d,%d,ST_GeomFromText('LineString(%lf %lf,%lf %lf)',4326))",ID++,Traj[i-1].id,Traj[i].id,cur.x,cur.y,pre.x,pre.y);
-					SQL = buffer;
-					DB->execUpdate(SQL);
-				}
-				cur = network->getPointById(path[psz-1]);
-				sprintf_s(buffer,"insert into trajectory_line values(%d,%d,%d,ST_GeomFromText('LineString(%lf %lf,%lf %lf)',4326))",ID++,Traj[i-1].id,Traj[i].id,Traj[i-1].x,Traj[i-1].y,cur.x,cur.y);
-				SQL = buffer;
-				DB->execUpdate(SQL);
-			}
 
+			if( ! path.empty()) {
+				//Point cur(network->getPointById(path[1]));
+				//sprintf_s(buffer+cnt,BUFFSIZE-cnt,",%lf %lf",cur.x,cur.y);
+				size_t psz = path.size();
+				for(int j=psz-2;j>0;--j){
+					Point cur = network->getPointById(path[j]);
+					cnt = strlen(buffer);
+					sprintf_s(buffer+cnt,BUFFSIZE-cnt,",%.6f %.6f",cur.x,cur.y);
+				}
+				cnt = strlen(buffer);
+				//cout<<cnt<<endl;
+				sprintf_s(buffer+cnt,BUFFSIZE-cnt,",%.6f %.6f",Traj[i].x,Traj[i].y);
+			}
+			cnt = strlen(buffer);
+			if(cnt == baseLen){
+				sprintf_s(buffer+cnt,BUFFSIZE-cnt,",%.6f %.6f",Traj[i].x,Traj[i].y);
+			}
+			sprintf_s(buffer+cnt,BUFFSIZE-cnt,")',4326))");
+			SQL = buffer;
+			DB->execUpdate(buffer);
+			memset(buffer,0,sizeof(buffer));
+			sprintf_s(buffer,"insert into trajectory_line values(%d,ST_GeomFromText('LineString(%.6f %.6f"
+				,ID++,Traj[i].x,Traj[i].y);
 		}
 	}
+	//cout<<cnt<<endl;
+	//cnt = strlen(buffer);
+	//sprintf_s(buffer+cnt,BUFFSIZE-cnt,")',4326))");
+	//SQL = buffer;
+	//DB.execUpdate(SQL);
 }
 
 //处理原始数据，把LineString中含有多于两个点的部分拆分后存入数据库
@@ -434,10 +485,8 @@ int Insert(string SQL,int id){
 		for(int j=1;j<sz;j++){
 
 			SQL = "insert into network values(";
-			SQL += std::to_string(id++)+",0,0,";//id,source,target
-			SQL += PQgetvalue(res,i,0);//osm_id
-			SQL += ",";
-			for(int k=1;k<fieldNum;k++){
+			
+			for(int k=0;k<fieldNum;k++){
 
 				char * ss = PQgetvalue(res,i,k);
 				if(strlen(ss) == 0) 
@@ -466,9 +515,9 @@ int Insert(string SQL,int id){
 						SQL += "'";
 					}
 				}
-				if(k+1 == fieldNum) break;
 				SQL += ",";
 			}
+			SQL += std::to_string(id++)+",0,0";//id,source,target
 			SQL += ")";
 			//cerr<<SQL<<endl;
 			DB->execUpdate(SQL);
@@ -491,13 +540,8 @@ void preProcData(){
 		DB->execUpdate(SQL);
 	}
 	else{
-		SQL = "";
-		ifstream fin;
-		fin.open("createNetwork.txt");
-		string tmp;
-		while(fin>>tmp) SQL += tmp;
-		fin.close();
-		DB->execUpdate(SQL);
+		cerr<<"table network isn't exist!"<<endl;
+		exit(-1);
 	}
 
 	string Field = "";
@@ -588,11 +632,15 @@ bool readConfig(){
 }
 
 int _tmain(int argc, _TCHAR* argv[]){
-
-	//preProcData();
-	//cerr<<"over"<<endl;
+	/*dbname = "osm";
+	dbport = "5432";
+	dbaddr = "127.0.0.1";
+	DB = new Database(dbname,dbport,dbaddr);
+	preProcData();
+	cerr<<"over"<<endl;
+	return 0;*/
 	if(!readConfig()){
-		cerr << "read config.ini error!" <<endl;
+		cerr << "read config.ini error!" <<endl; 
 		return 0;
 	}
 
@@ -617,7 +665,7 @@ int _tmain(int argc, _TCHAR* argv[]){
 		cerr<<"loadInitPoint cost "<<clock()-tm<<"ms"<<endl;
 
 		vector <Point> res = ST_Matching_Algorithm();
-
+		res = dealFlyPoint(res);
 		cerr<<"start writeToDB->.."<<endl;
 		tm = clock();
 		writeToDB(res);
